@@ -312,7 +312,7 @@ fn is_row_blank(text: &Rope, row: usize) -> bool {
 }
 
 /// Get the column of the first non-whitespace character on a row
-fn get_indent_col(text: &Rope, row: usize) -> usize {
+pub(crate) fn get_indent_col(text: &Rope, row: usize) -> usize {
     let line_start = text.line_start_offset(row);
     let line_end = text.line_end_offset(row);
     let mut col = 0;

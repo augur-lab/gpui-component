@@ -300,6 +300,14 @@ impl InputMode {
             _ => None,
         }
     }
+
+    /// Get the language name for code editor.
+    pub(super) fn language(&self) -> Option<&SharedString> {
+        match self {
+            InputMode::CodeEditor { language, .. } => Some(language),
+            _ => None,
+        }
+    }
 }
 
 /// Builds the tree-sitter edit for a text replacement.
