@@ -1,10 +1,10 @@
-use std::{borrow::Cow, rc::Rc};
+use std::{borrow::Cow, collections::HashSet, rc::Rc};
 
 use chrono::{Datelike, Local, NaiveDate};
 use gpui::{
     App, ClickEvent, Context, Div, ElementId, Empty, Entity, EventEmitter, FocusHandle,
     InteractiveElement, IntoElement, ParentElement, Render, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window, prelude::FluentBuilder as _, px,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
     relative,
 };
 use rust_i18n::t;
@@ -281,6 +281,7 @@ pub struct CalendarState {
     /// Number of the months view to show.
     number_of_months: usize,
     pub(crate) disabled_matcher: Option<Rc<Matcher>>,
+    pub(crate) marked_dates: Rc<HashSet<NaiveDate>>,
 }
 
 impl CalendarState {
@@ -298,6 +299,7 @@ impl CalendarState {
             today,
             number_of_months: 1,
             disabled_matcher: None,
+            marked_dates: Rc::new(HashSet::new()),
         }
         .year_range((today.year() - 50, today.year() + 50))
     }
@@ -318,6 +320,17 @@ impl CalendarState {
         _: &mut Context<Self>,
     ) {
         self.disabled_matcher = Some(Rc::new(disabled.into()));
+    }
+
+    /// Set marked dates to display indicators on specific dates.
+    pub fn set_marked_dates(
+        &mut self,
+        dates: HashSet<NaiveDate>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked_dates = Rc::new(dates);
+        cx.notify();
     }
 
     /// Set the date of the calendar.
@@ -571,6 +584,8 @@ impl Calendar {
 
         let date_id: SharedString = format!("{}_{}", date.format("%Y-%m-%d"), offset_month).into();
 
+        let is_marked = state.marked_dates.contains(d);
+
         self.item_button(
             date_id.clone(),
             day.to_string(),
@@ -578,6 +593,7 @@ impl Calendar {
             is_in_range,
             !is_current_month || disabled,
             disabled,
+            is_marked && !is_active,
             window,
             cx,
         )
@@ -743,6 +759,7 @@ impl Calendar {
         secondary_active: bool,
         muted: bool,
         disabled: bool,
+        marked: bool,
         _: &mut Window,
         cx: &mut App,
     ) -> Stateful<Div> {
@@ -753,6 +770,7 @@ impl Calendar {
                 Size::Large => this.size_10().rounded(cx.theme().radius * 2.),
                 _ => this.size_9().rounded(cx.theme().radius),
             })
+            .relative()
             .justify_center()
             .when(muted, |this| {
                 this.text_color(if disabled {
@@ -780,6 +798,17 @@ impl Calendar {
                     .text_color(cx.theme().primary_foreground)
             })
             .child(label.into())
+            .when(marked && !active, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(2.0))
+                        .right(px(2.0))
+                        .size_1p5()
+                        .rounded_full()
+                        .bg(cx.theme().primary),
+                )
+            })
     }
 
     fn render_days(&self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -869,6 +898,7 @@ impl Calendar {
                             false,
                             false,
                             false,
+                            false,
                             window,
                             cx,
                         )
@@ -914,6 +944,7 @@ impl Calendar {
                             ix,
                             year.to_string(),
                             active,
+                            false,
                             false,
                             false,
                             false,

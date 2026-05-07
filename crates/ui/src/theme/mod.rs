@@ -9,6 +9,7 @@ use std::{
     ops::{Deref, DerefMut},
     rc::Rc,
     sync::Arc,
+    time::Duration,
 };
 
 mod color;
@@ -84,6 +85,8 @@ pub struct Theme {
     pub list: ListSettings,
     /// The sheet settings.
     pub sheet: SheetSettings,
+    /// Animation speed multiplier (1.0 = normal, 2.0 = 2x faster)
+    pub animation_speed: f32,
 }
 
 impl Default for Theme {
@@ -201,6 +204,13 @@ impl Theme {
             .editor_background
             .unwrap_or_else(|| self.input_background())
     }
+
+    /// Get adjusted animation duration based on animation_speed.
+    /// animation_speed 2.0 means 2x faster (half duration).
+    pub fn animation_duration(&self, base_ms: u64) -> Duration {
+        let adjusted_ms = (base_ms as f32 / self.animation_speed) as u64;
+        Duration::from_millis(adjusted_ms.max(50))
+    }
 }
 
 impl From<&ThemeColor> for Theme {
@@ -233,6 +243,7 @@ impl From<&ThemeColor> for Theme {
             dark_theme: Rc::new(ThemeConfig::default()),
             highlight_theme: HighlightTheme::default_light(),
             sheet: SheetSettings::default(),
+            animation_speed: 1.0,
         }
     }
 }
