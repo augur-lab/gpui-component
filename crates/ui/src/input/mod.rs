@@ -1,7 +1,9 @@
 /// The character used to mask password input fields.
 pub(super) const MASK_CHAR: char = '•';
 
+mod auto_indent;
 mod blink_cursor;
+mod bracket;
 mod change;
 mod clear_button;
 mod cursor;

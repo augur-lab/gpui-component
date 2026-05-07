@@ -369,6 +369,73 @@ impl SyntaxHighlighter {
         self.tree.as_ref()
     }
 
+    /// Find all bracket pairs in the given range using the brackets query.
+    /// Returns a list of (open_range, close_range) tuples.
+    pub fn bracket_pairs(&self, range: Range<usize>) -> Vec<(Range<usize>, Range<usize>)> {
+        let mut result = Vec::new();
+
+        let Some(tree) = &self.tree else { return result };
+        let Some(config) = LanguageRegistry::singleton().language(&self.language) else { return result };
+
+        if config.brackets.is_empty() {
+            return result;
+        }
+
+        let Ok(query) = Query::new(&config.language, &config.brackets) else { return result };
+
+        let open_ix = query.capture_names().iter().position(|n| *n == "open");
+        let close_ix = query.capture_names().iter().position(|n| *n == "close");
+
+        let (Some(open_ix), Some(close_ix)) = (open_ix, close_ix) else { return result };
+        let open_ix = open_ix as u32;
+        let close_ix = close_ix as u32;
+
+        let mut query_cursor = QueryCursor::new();
+        query_cursor.set_byte_range(range.clone());
+
+        struct BracketMatchRaw {
+            open_range: Range<usize>,
+            close_range: Range<usize>,
+            pattern_index: usize,
+        }
+
+        let mut matches_iter = query_cursor.matches(&query, tree.root_node(), TextProvider(&self.text));
+
+        let mut all_matches: Vec<BracketMatchRaw> = Vec::new();
+
+        while let Some(m) = matches_iter.next() {
+            let pattern_index = m.pattern_index;
+            let mut open_range: Option<Range<usize>> = None;
+            let mut close_range: Option<Range<usize>> = None;
+
+            for cap in m.captures {
+                if cap.index == open_ix {
+                    open_range = Some(cap.node.byte_range());
+                } else if cap.index == close_ix {
+                    close_range = Some(cap.node.byte_range());
+                }
+            }
+
+            if let (Some(open), Some(close)) = (open_range, close_range) {
+                all_matches.push(BracketMatchRaw {
+                    open_range: open,
+                    close_range: close,
+                    pattern_index,
+                });
+            }
+        }
+
+        // Filter to single-char brackets
+        for m in all_matches {
+            if m.open_range.len() == 1 || m.close_range.len() == 1 {
+                result.push((m.open_range, m.close_range));
+            }
+        }
+
+        result.sort_by(|a, b| a.0.start.cmp(&b.0.start));
+        result
+    }
+
     /// Returns the language name for this highlighter.
     pub fn language(&self) -> &SharedString {
         &self.language

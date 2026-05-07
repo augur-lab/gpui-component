@@ -608,14 +608,23 @@ impl Language {
 
         let language = tree_sitter::Language::new(language);
 
-        LanguageConfig::new(
+        let mut config = LanguageConfig::new(
             self.name(),
             language,
             self.injection_languages(),
             query,
             injection,
             locals,
-        )
+        );
+
+        // Add brackets and indents for C++
+        #[cfg(feature = "tree-sitter-cpp")]
+        if matches!(self, Self::Cpp) {
+            config.brackets = include_str!("languages/cpp/brackets.scm").into();
+            config.indents = include_str!("languages/cpp/indents.scm").into();
+        }
+
+        config
     }
 }
 

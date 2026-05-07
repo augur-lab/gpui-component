@@ -64,6 +64,8 @@ pub struct LanguageConfig {
     pub highlights: SharedString,
     pub injections: SharedString,
     pub locals: SharedString,
+    pub brackets: SharedString,
+    pub indents: SharedString,
 }
 
 impl LanguageConfig {
@@ -82,7 +84,19 @@ impl LanguageConfig {
             highlights: SharedString::from(highlights.to_string()),
             injections: SharedString::from(injections.to_string()),
             locals: SharedString::from(locals.to_string()),
+            brackets: SharedString::default(),
+            indents: SharedString::default(),
         }
+    }
+
+    pub fn with_brackets(mut self, brackets: &str) -> Self {
+        self.brackets = SharedString::from(brackets.to_string());
+        self
+    }
+
+    pub fn with_indents(mut self, indents: &str) -> Self {
+        self.indents = SharedString::from(indents.to_string());
+        self
     }
 }
 
