@@ -199,9 +199,15 @@ impl From<FontWeightContent> for FontWeight {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
 pub struct ThemeStyle {
-    color: Option<Hsla>,
-    font_style: Option<FontStyle>,
-    font_weight: Option<FontWeightContent>,
+    pub color: Option<Hsla>,
+    pub font_style: Option<FontStyle>,
+    pub font_weight: Option<FontWeightContent>,
+}
+
+impl ThemeStyle {
+    pub fn new(color: Option<Hsla>, font_style: Option<FontStyle>, font_weight: Option<FontWeightContent>) -> Self {
+        Self { color, font_style, font_weight }
+    }
 }
 
 impl From<ThemeStyle> for HighlightStyle {
