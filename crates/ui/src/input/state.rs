@@ -23,6 +23,10 @@ use unicode_segmentation::*;
 use super::{
     DisplayMap, MASK_CHAR,
     blink_cursor::BlinkCursor,
+    bracket::{
+        BracketPair, get_bracket_pair_for_end, get_bracket_pair_for_start, is_bracket_end,
+        is_bracket_start, is_comment_or_string, is_in_template_context,
+    },
     change::Change,
     element::{EditorScrollbarSnapshot, TextElement},
     mask_pattern::MaskPattern,
@@ -106,6 +110,12 @@ pub enum InputEvent {
     PressEnter { secondary: bool },
     Focus,
     Blur,
+    TypingRightBrace { open_row: usize, close_row: usize },
+}
+
+pub struct AutocloseRegion {
+    pub range: std::ops::Range<usize>,
+    pub pair: &'static BracketPair,
 }
 
 pub(super) const CONTEXT: &str = "Input";
@@ -392,6 +402,11 @@ pub struct InputState {
 
     pub(super) _context_menu_task: Task<Result<()>>,
     pub(super) inline_completion: InlineCompletion,
+
+    pub(super) matched_brace_ranges: Option<(usize, usize, usize, usize)>,
+    pub(super) autoclose_regions: Vec<AutocloseRegion>,
+    pub(super) rainbow_bracket_ranges: Vec<(usize, Vec<std::ops::Range<usize>>)>,
+    pub(super) enable_rainbow_brackets: bool,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -478,6 +493,10 @@ impl InputState {
             hover_definition: HoverDefinition::default(),
             silent_replace_text: false,
             emit_events: true,
+            matched_brace_ranges: None,
+            autoclose_regions: Vec::new(),
+            rainbow_bracket_ranges: Vec::new(),
+            enable_rainbow_brackets: false,
             size: Size::default(),
             _subscriptions,
             _context_menu_task: Task::ready(Ok(())),
@@ -526,6 +545,11 @@ impl InputState {
         let language: SharedString = language.into();
         self.mode = InputMode::code_editor(language);
         self.searchable = true;
+        self
+    }
+
+    pub fn enable_rainbow_brackets(mut self, enable: bool) -> Self {
+        self.enable_rainbow_brackets = enable;
         self
     }
 
@@ -2286,6 +2310,171 @@ impl InputState {
     ) {
         // No-op
     }
+
+    fn find_matching_open_brace_row(&self, from_row: usize) -> Option<usize> {
+        let mut open_braces: u32 = 0;
+        for row in (0..from_row).rev() {
+            let start = self.text.line_start_offset(row);
+            let end = self.text.line_end_offset(row);
+            let text = self.text.slice(start..end).to_string();
+            for ch in text.chars() {
+                match ch {
+                    '{' => {
+                        if open_braces == 0 {
+                            return Some(row);
+                        }
+                        open_braces = open_braces.saturating_sub(1);
+                    }
+                    '}' => open_braces += 1,
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn find_matching_brace(&self) -> Option<(usize, usize, usize, usize)> {
+        let cursor = self.cursor();
+        let highlighter = match self.mode.highlighter() {
+            Some(rc) => {
+                let guard = rc.borrow();
+                if guard.is_none() {
+                    return None;
+                }
+                guard
+            }
+            None => return None,
+        };
+        let highlighter = highlighter.as_ref().unwrap();
+        let text_len = highlighter.text().len();
+        let pairs = highlighter.bracket_pairs(0..text_len);
+        let mut best_match: Option<(usize, usize, usize, usize)> = None;
+        let mut best_size = usize::MAX;
+        for (open_range, close_range) in pairs {
+            let cursor_at_open = cursor >= open_range.start && cursor <= open_range.end;
+            let cursor_at_close = cursor >= close_range.start && cursor <= close_range.end;
+            let cursor_inside = cursor > open_range.end && cursor < close_range.start;
+            if cursor_at_open || cursor_at_close || cursor_inside {
+                let size = close_range.start - open_range.start;
+                if size < best_size {
+                    best_size = size;
+                    best_match = Some((open_range.start, open_range.end - open_range.start, close_range.start, close_range.end - close_range.start));
+                }
+            }
+        }
+        best_match
+    }
+
+    pub(super) fn compute_rainbow_brackets(&mut self, visible_start: usize, visible_end: usize) {
+        if !self.enable_rainbow_brackets {
+            self.rainbow_bracket_ranges.clear();
+            return;
+        }
+        let text = &self.text;
+        let syntax_tree = self.mode.highlighter().and_then(|rc| rc.borrow().as_ref().and_then(|h| h.tree().cloned()));
+        let is_at_comment_or_string = |pos: usize| -> bool {
+            let Some(ref tree) = syntax_tree else { return false; };
+            let root = tree.root_node();
+            let Some(node) = root.named_descendant_for_byte_range(pos, pos) else { return false; };
+            is_comment_or_string(node.kind())
+        };
+        let mut depth = 0usize;
+        let mut bracket_stack: Vec<(char, usize, usize)> = Vec::new();
+        let mut result: Vec<(usize, Vec<std::ops::Range<usize>>)> = Vec::new();
+        let mut byte_offset = 0usize;
+        for c in text.chars() {
+            if byte_offset >= visible_end { break; }
+            if byte_offset >= visible_start {
+                if is_bracket_start(c) && !is_at_comment_or_string(byte_offset) {
+                    depth += 1;
+                    bracket_stack.push((c, byte_offset, depth));
+                } else if is_bracket_end(c) && !is_at_comment_or_string(byte_offset) {
+                    if let Some((open_ch, open_offset, open_depth)) = bracket_stack.pop() {
+                        let expected_close = get_bracket_pair_for_start(open_ch).map(|p| p.end);
+                        if expected_close == Some(c) {
+                            let depth_index = (open_depth - 1) % 7;
+                            while result.len() <= depth_index {
+                                result.push((result.len(), Vec::new()));
+                            }
+                            result[depth_index].1.push(open_offset..open_offset + open_ch.len_utf8());
+                            result[depth_index].1.push(byte_offset..byte_offset + c.len_utf8());
+                        }
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+            }
+            byte_offset += c.len_utf8();
+        }
+        self.rainbow_bracket_ranges = result;
+    }
+
+    pub(super) fn handle_bracket_input(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let chars: Vec<char> = text.chars().collect();
+        if chars.len() != 1 { return false; }
+        let ch = chars[0];
+        if !self.mode.is_code_editor() { return false; }
+        let cursor = self.cursor();
+        let is_empty_selection = self.selected_range.is_empty();
+        let syntax_tree = self.mode.highlighter().and_then(|rc| rc.borrow().as_ref().and_then(|h| h.tree().cloned()));
+        let is_in_string = if let Some(ref tree) = syntax_tree {
+            let root = tree.root_node();
+            if let Some(node) = root.named_descendant_for_byte_range(cursor, cursor) {
+                is_comment_or_string(node.kind()) && node.kind().contains("string")
+            } else { false }
+        } else { false };
+        if ch == '"' || ch == '\'' {
+            if is_in_string {
+                if let Some(next_ch) = self.text.chars_at(cursor).next() {
+                    if next_ch == ch {
+                        self.selected_range = (cursor + ch.len_utf8()..cursor + ch.len_utf8()).into();
+                        self.update_preferred_column();
+                        cx.notify();
+                        return true;
+                    }
+                }
+            }
+            if is_empty_selection && !is_in_string {
+                let pair = get_bracket_pair_for_start(ch).unwrap();
+                let insert_text = format!("{}{}", ch, pair.end);
+                self.replace_text_in_range_silent(None, &insert_text, window, cx);
+                self.selected_range = (cursor + ch.len_utf8()..cursor + ch.len_utf8()).into();
+                self.update_preferred_column();
+                cx.notify();
+                return true;
+            }
+        }
+        if let Some(pair) = get_bracket_pair_for_start(ch) {
+            if pair.close && ch != '"' && ch != '\'' {
+                if is_empty_selection {
+                    let insert_text = format!("{}{}", ch, pair.end);
+                    self.replace_text_in_range_silent(None, &insert_text, window, cx);
+                    let new_cursor = cursor + ch.len_utf8();
+                    self.selected_range = (new_cursor..new_cursor).into();
+                    self.autoclose_regions.push(AutocloseRegion { range: new_cursor..new_cursor, pair });
+                    self.update_preferred_column();
+                    cx.notify();
+                    return true;
+                }
+            }
+        }
+        if let Some(_pair) = get_bracket_pair_for_end(ch) {
+            if ch != '"' && ch != '\'' {
+                if let Some(next_ch) = self.text.chars_at(cursor).next() {
+                    if next_ch == ch {
+                        let is_autoclose = self.autoclose_regions.iter().any(|r| r.range.start == cursor && r.pair.end == ch);
+                        if is_autoclose {
+                            self.selected_range = (cursor + ch.len_utf8()..cursor + ch.len_utf8()).into();
+                            self.autoclose_regions.retain(|r| !(r.range.start == cursor && r.pair.end == ch));
+                            self.update_preferred_column();
+                            cx.notify();
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 impl EntityInputHandler for InputState {
@@ -2399,10 +2588,20 @@ impl EntityInputHandler for InputState {
         self.selected_range = (new_offset..new_offset).into();
         self.ime_marked_range.take();
         self.update_preferred_column();
+        self.matched_brace_ranges = self.find_matching_brace();
+        if self.enable_rainbow_brackets {
+            self.compute_rainbow_brackets(0, self.text.len());
+        }
         self.update_search(cx);
         self.mode.update_auto_grow(&self.display_map);
         if !self.silent_replace_text {
             self.handle_completion_trigger(&range, &new_text, window, cx);
+        }
+        if new_text == "}" && !self.silent_replace_text && self.mode.is_code_editor() {
+            let close_row = self.text.offset_to_point(new_offset).row;
+            if let Some(open_row) = self.find_matching_open_brace_row(close_row) {
+                cx.emit(InputEvent::TypingRightBrace { open_row, close_row });
+            }
         }
         if self.emit_events {
             cx.emit(InputEvent::Change);
