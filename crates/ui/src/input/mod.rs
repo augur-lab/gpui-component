@@ -23,6 +23,7 @@ mod search;
 mod selection;
 mod state;
 
+pub(crate) use auto_indent::{IndentSuggestion, suggest_indent};
 pub(crate) use clear_button::*;
 pub use cursor::*;
 #[cfg(target_family = "wasm")]

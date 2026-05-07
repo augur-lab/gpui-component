@@ -1348,60 +1348,75 @@ impl InputState {
         }
 
         if self.mode.is_multi_line() {
-            if self.mode.is_code_editor() {
-                // Use tree-sitter based auto-indent for code editors
-                let cursor_offset = self.cursor();
-                let language = self.mode.language().cloned().unwrap_or_default();
-                let tab_size = self.mode.tab_size();
-                let suggestion = {
-                    let highlighter_result = self.mode.highlighter().and_then(|rc| {
-                        let guard = rc.borrow();
-                        guard.as_ref().map(|h| {
-                            crate::input::auto_indent::suggest_indent(
-                                &language, h, &self.text, cursor_offset,
+            let suggestion = if self.mode.is_code_editor() {
+                let cursor = self.cursor();
+                if let Some(language) = self.mode.language() {
+                    if let Some(hl_rc) = self.mode.highlighter() {
+                        let hl = hl_rc.borrow();
+                        if let Some(ref hl) = *hl {
+                            super::suggest_indent(
+                                language.as_str(),
+                                hl,
+                                &self.text,
+                                cursor,
                             )
-                        })
-                    });
-                    highlighter_result.unwrap_or_else(|| {
-                        let row = self.text.offset_to_point(cursor_offset).row;
-                        crate::input::auto_indent::IndentSuggestion {
-                            delta: 0,
-                            basis_row: row,
-                            split_brace: false,
+                        } else {
+                            super::IndentSuggestion::default()
                         }
-                    })
-                };
-
-                // Compute indent from basis_row + delta
-                let basis_indent = crate::input::auto_indent::get_indent_col(&self.text, suggestion.basis_row);
-                let indent_col = if suggestion.delta >= 0 {
-                    basis_indent + (suggestion.delta as usize * tab_size.tab_size)
-                } else {
-                    basis_indent.saturating_sub((-suggestion.delta as usize) * tab_size.tab_size)
-                };
-                let indent = " ".repeat(indent_col);
-
-                if suggestion.split_brace {
-                    // Split {} onto separate lines
-                    let insert_text = format!("\n{}\n{}", indent, indent);
-                    self.replace_text_in_range_silent(None, &insert_text, window, cx);
-                    self.pause_blink_cursor(cx);
-                    // Move cursor to the line between { and }
-                    let mut new_cursor = self.cursor();
-                    if new_cursor >= indent.len() + 1 {
-                        new_cursor = new_cursor.saturating_sub(indent.len() + 1);
+                    } else {
+                        super::IndentSuggestion::default()
                     }
-                    self.selected_range = (new_cursor..new_cursor).into();
                 } else {
-                    let insert_text = format!("\n{}", indent);
-                    self.replace_text_in_range_silent(None, &insert_text, window, cx);
-                    self.pause_blink_cursor(cx);
+                    super::IndentSuggestion::default()
                 }
             } else {
-                // Plain text multi-line: just newline
-                self.replace_text_in_range_silent(None, "\n", window, cx);
-                self.pause_blink_cursor(cx);
+                super::IndentSuggestion::default()
+            };
+
+            let (new_line_text, split_brace_indent_len) = if self.mode.is_code_editor() {
+                let tab_str = self.mode.tab_size().to_string();
+
+                if suggestion.split_brace {
+                    let basis_start = self.text.line_start_offset(suggestion.basis_row);
+                    let basis_end = self.text.line_end_offset(suggestion.basis_row);
+                    let basis_text = self.text.slice(basis_start..basis_end).to_string();
+                    let basis_indent: String = basis_text.chars().take_while(|c| c.is_whitespace() && *c != '\n' && *c != '\r').collect();
+
+                    let inner_indent = format!("{}{}", basis_indent, tab_str);
+                    let indent_len = inner_indent.len();
+                    (format!("\n{}\n{}", inner_indent, basis_indent), Some(indent_len))
+                } else {
+                    let basis_start = self.text.line_start_offset(suggestion.basis_row);
+                    let basis_end = self.text.line_end_offset(suggestion.basis_row);
+                    let basis_text = self.text.slice(basis_start..basis_end).to_string();
+                    let basis_indent: String = basis_text.chars().take_while(|c| c.is_whitespace() && *c != '\n' && *c != '\r').collect();
+
+                    let indent = match suggestion.delta {
+                        1 => format!("{}{}", basis_indent, tab_str),
+                        -1 => {
+                            if basis_indent.len() >= tab_str.len() {
+                                basis_indent[..basis_indent.len() - tab_str.len()].to_string()
+                            } else {
+                                basis_indent
+                            }
+                        }
+                        _ => basis_indent,
+                    };
+
+                    (format!("\n{}", indent), None)
+                }
+            } else {
+                let base_indent = self.indent_of_next_line();
+                (format!("\n{}", base_indent), None)
+            };
+            let cursor = self.cursor();
+            self.replace_text_in_range_silent(None, &new_line_text, window, cx);
+            if let Some(indent_len) = split_brace_indent_len {
+                let new_cursor = cursor + 1 + indent_len;
+                self.move_to(new_cursor, None, cx);
+                self.update_preferred_column();
             }
+            self.pause_blink_cursor(cx);
         } else {
             // Single line input, just emit the event (e.g.: In a dialog to confirm).
             cx.propagate();
