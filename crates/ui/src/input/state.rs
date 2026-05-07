@@ -2534,6 +2534,13 @@ impl EntityInputHandler for InputState {
             self.pause_blink_cursor(cx);
         }
 
+        // Handle auto-closing brackets for code editor
+        if !self.silent_replace_text && self.mode.is_code_editor() {
+            if self.handle_bracket_input(new_text, window, cx) {
+                return;
+            }
+        }
+
         let range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))

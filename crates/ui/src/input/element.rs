@@ -1342,6 +1342,7 @@ pub(super) struct PrepaintState {
     hover_highlight_path: Option<Path<Pixels>>,
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
+    matched_brace_paths: Vec<Path<Pixels>>,
     hover_definition_hitbox: Option<Hitbox>,
     indent_guides_path: Option<Path<Pixels>>,
     bounds: Bounds<Pixels>,
@@ -1747,6 +1748,24 @@ impl Element for TextElement {
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
+        // Compute matched brace highlight paths
+        let matched_brace_paths = {
+            let state = self.state.read(cx);
+            let mut paths = Vec::new();
+            if let Some((open_start, open_len, close_start, close_len)) = state.matched_brace_ranges
+            {
+                let open_range = open_start..open_start + open_len;
+                let close_range = close_start..close_start + close_len;
+                if let Some(path) = Self::layout_match_range(open_range, &last_layout, &bounds) {
+                    paths.push(path);
+                }
+                if let Some(path) = Self::layout_match_range(close_range, &last_layout, &bounds) {
+                    paths.push(path);
+                }
+            }
+            paths
+        };
+
         let state = self.state.read(cx);
         let line_numbers = if state.mode.line_number() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
@@ -1824,6 +1843,7 @@ impl Element for TextElement {
             selection_path,
             search_match_paths,
             hover_highlight_path,
+            matched_brace_paths,
             hover_definition_hitbox,
             document_color_paths,
             indent_guides_path,
@@ -1943,6 +1963,11 @@ impl Element for TextElement {
         // Paint document colors
         for (path, color) in prepaint.document_color_paths.iter() {
             window.paint_path(path.clone(), *color);
+        }
+
+        // Paint matched brace highlights
+        for path in prepaint.matched_brace_paths.iter() {
+            window.paint_path(path.clone(), cx.theme().primary.opacity(0.3));
         }
 
         // Paint text with inline completion ghost line support
