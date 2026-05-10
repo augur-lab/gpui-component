@@ -1,7 +1,7 @@
 use gpui::{Context, Point, Window};
 
 use crate::input::{
-    InputState, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
+    InputEvent, InputState, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
     MoveToEnd, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveUp, RopeExt as _,
 };
 
@@ -74,6 +74,7 @@ impl InputState {
 
         let offset = self.cursor();
         let was_preferred_column = self.preferred_column;
+        let old_line = self.cursor_position().line;
 
         let mut display_point = self.display_map.offset_to_wrap_display_point(offset);
 
@@ -134,6 +135,13 @@ impl InputState {
         self.move_to(new_offset, Some(direction), cx);
         // Set back the preferred_column
         self.preferred_column = was_preferred_column;
+        
+        // Emit CursorLineChanged if line changed
+        let new_line = self.cursor_position().line;
+        if new_line != old_line {
+            cx.emit(InputEvent::CursorLineChanged { line: new_line });
+        }
+        
         cx.notify();
     }
 

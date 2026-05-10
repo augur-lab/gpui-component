@@ -111,6 +111,7 @@ pub enum InputEvent {
     Focus,
     Blur,
     TypingRightBrace { open_row: usize, close_row: usize },
+    CursorLineChanged { line: u32 },
 }
 
 pub struct AutocloseRegion {
