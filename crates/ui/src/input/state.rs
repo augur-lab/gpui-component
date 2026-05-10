@@ -1348,6 +1348,8 @@ impl InputState {
             self.clear_inline_completion(cx);
         }
 
+        let old_line = self.cursor_position().line;
+
         if self.mode.is_multi_line() {
             let suggestion = if self.mode.is_code_editor() {
                 let cursor = self.cursor();
@@ -1421,6 +1423,12 @@ impl InputState {
         } else {
             // Single line input, just emit the event (e.g.: In a dialog to confirm).
             cx.propagate();
+        }
+
+        // Emit CursorLineChanged if cursor moved to a new line
+        let new_line = self.cursor_position().line;
+        if new_line != old_line {
+            cx.emit(InputEvent::CursorLineChanged { line: new_line });
         }
 
         cx.emit(InputEvent::PressEnter {
