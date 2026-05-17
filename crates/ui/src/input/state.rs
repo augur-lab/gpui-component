@@ -408,6 +408,7 @@ pub struct InputState {
     pub(super) autoclose_regions: Vec<AutocloseRegion>,
     pub(super) rainbow_bracket_ranges: Vec<(usize, Vec<std::ops::Range<usize>>)>,
     pub(super) enable_rainbow_brackets: bool,
+    pub(super) rainbow_brackets_dirty: bool,
 }
 
 impl EventEmitter<InputEvent> for InputState {}
@@ -498,6 +499,7 @@ impl InputState {
             autoclose_regions: Vec::new(),
             rainbow_bracket_ranges: Vec::new(),
             enable_rainbow_brackets: false,
+            rainbow_brackets_dirty: false,
             size: Size::default(),
             _subscriptions,
             _context_menu_task: Task::ready(Ok(())),
@@ -552,6 +554,13 @@ impl InputState {
     pub fn enable_rainbow_brackets(mut self, enable: bool) -> Self {
         self.enable_rainbow_brackets = enable;
         self
+    }
+
+    pub fn ensure_rainbow_brackets(&mut self) {
+        if self.rainbow_brackets_dirty && self.enable_rainbow_brackets {
+            self.rainbow_brackets_dirty = false;
+            self.compute_rainbow_brackets(0, self.text.len());
+        }
     }
 
     /// Sets whether the context menu that shows on right-click is enabled.
@@ -2401,6 +2410,7 @@ impl InputState {
     }
 
     pub(super) fn find_matching_brace(&self) -> Option<(usize, usize, usize, usize)> {
+        const SEARCH_RADIUS: usize = 4096;
         let cursor = self.cursor();
         let highlighter = match self.mode.highlighter() {
             Some(rc) => {
@@ -2414,7 +2424,9 @@ impl InputState {
         };
         let highlighter = highlighter.as_ref().unwrap();
         let text_len = highlighter.text().len();
-        let pairs = highlighter.bracket_pairs(0..text_len);
+        let search_start = cursor.saturating_sub(SEARCH_RADIUS);
+        let search_end = (cursor + SEARCH_RADIUS).min(text_len);
+        let pairs = highlighter.bracket_pairs(search_start..search_end);
         let mut best_match: Option<(usize, usize, usize, usize)> = None;
         let mut best_size = usize::MAX;
         for (open_range, close_range) in pairs {
@@ -2664,7 +2676,7 @@ impl EntityInputHandler for InputState {
         self.update_preferred_column();
         self.matched_brace_ranges = self.find_matching_brace();
         if self.enable_rainbow_brackets {
-            self.compute_rainbow_brackets(0, self.text.len());
+            self.rainbow_brackets_dirty = true;
         }
         self.update_search(cx);
         self.mode.update_auto_grow(&self.display_map);
