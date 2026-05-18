@@ -208,9 +208,9 @@ fn tree_sitter_indent(
         if range.start.row == prev_row && range.end > new_row_start {
             indent_from_prev_row = true;
         }
-        // If indent range ends at or after prev_row_start and at or before new_row_start
-        // Use >= to handle the case where range ends exactly at the } character
-        if range.end >= prev_row_start && range.end <= new_row_start {
+        // Pre-edit text has `}` on the next line, which will shift down after newline insertion.
+        // Use `<` so ranges ending on the `}` line are not treated as outdents.
+        if range.end >= prev_row_start && range.end < new_row_start {
             outdent_to_row = outdent_to_row.min(range.start.row);
         }
     }

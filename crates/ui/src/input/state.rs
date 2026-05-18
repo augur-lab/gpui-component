@@ -25,7 +25,7 @@ use super::{
     blink_cursor::BlinkCursor,
     bracket::{
         BracketPair, get_bracket_pair_for_end, get_bracket_pair_for_start, is_bracket_end,
-        is_bracket_start, is_comment_or_string, is_in_template_context,
+        is_bracket_start, is_comment_or_string,
     },
     change::Change,
     element::{EditorScrollbarSnapshot, TextElement},
@@ -1239,7 +1239,28 @@ impl InputState {
         }
     }
 
+    pub(super) fn invalidate_autoclose_regions(&mut self) {
+        let cursor = self.cursor();
+        self.autoclose_regions.retain(|r| r.range.start == cursor);
+    }
+
+    fn select_autoclose_pair(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        if !self.selected_range.is_empty() {
+            return;
+        }
+        let cursor = self.cursor();
+        if let Some(region) = self.autoclose_regions.iter().find(|r| r.range.start == cursor) {
+            let open_len = region.pair.start.len_utf8();
+            if cursor >= open_len {
+                self.selected_range =
+                    ((cursor - open_len)..(cursor + region.pair.end.len_utf8())).into();
+                self.autoclose_regions.retain(|r| r.range.start != cursor);
+            }
+        }
+    }
+
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_autoclose_pair(window, cx);
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor()), cx)
         }
@@ -2411,23 +2432,6 @@ impl InputState {
         None
     }
 
-    pub(super) fn find_matching_brace(&self) -> Option<(usize, usize, usize, usize)> {
-        let cursor = self.cursor();
-        let highlighter = match self.mode.highlighter() {
-            Some(rc) => {
-                let guard = rc.borrow();
-                if guard.is_none() {
-                    return None;
-                }
-                guard
-            }
-            None => return None,
-        };
-        let highlighter = highlighter.as_ref().unwrap();
-        highlighter.innermost_bracket_pair(cursor)
-            .map(|(open, close)| (open.start, open.len(), close.start, close.len()))
-    }
-
     pub(super) fn refresh_matching_brace_async(&mut self, cx: &mut Context<Self>) {
         let cursor = self.cursor();
         let (tree, text, language) = match self.mode.highlighter() {
@@ -2561,6 +2565,26 @@ impl InputState {
                     self.update_preferred_column();
                     cx.notify();
                     return true;
+                } else if pair.surround {
+                    let (start, end) = (self.selected_range.start, self.selected_range.end);
+                    let close_str = pair.end.to_string();
+                    let open_str = ch.to_string();
+                    self.replace_text_in_range_silent(
+                        Some(self.range_to_utf16(&(end..end))),
+                        &close_str,
+                        window,
+                        cx,
+                    );
+                    self.replace_text_in_range_silent(
+                        Some(self.range_to_utf16(&(start..start))),
+                        &open_str,
+                        window,
+                        cx,
+                    );
+                    self.selected_range = ((start + 1)..(end + 1)).into();
+                    self.update_preferred_column();
+                    cx.notify();
+                    return true;
                 }
             }
         }
@@ -2641,12 +2665,11 @@ impl EntityInputHandler for InputState {
             self.pause_blink_cursor(cx);
         }
 
-        // DISABLED FOR TESTING: Handle auto-closing brackets for code editor
-        // if !self.silent_replace_text && self.mode.is_code_editor() {
-        //     if self.handle_bracket_input(new_text, window, cx) {
-        //         return;
-        //     }
-        // }
+        if !self.silent_replace_text && self.mode.is_code_editor() {
+            if self.handle_bracket_input(new_text, window, cx) {
+                return;
+            }
+        }
 
         let range = range_utf16
             .as_ref()
@@ -2705,7 +2728,7 @@ impl EntityInputHandler for InputState {
         // After text edit, adjust matched_brace_ranges offsets by edit delta
         // (like Zed's anchor system: keep highlight at correct relative position
         // until async task verifies it)
-        if let Some(mut pair) = self.matched_brace_ranges.take() {
+        if let Some(pair) = self.matched_brace_ranges.take() {
             let old_len = range.end - range.start;
             let new_len = new_text.len();
             let delta = new_len as isize - old_len as isize;
@@ -2724,6 +2747,26 @@ impl EntityInputHandler for InputState {
                 self.matched_brace_ranges = Some((open_start, open_len, close_start, close_len));
             } else {
                 self.matched_brace_ranges = Some(pair);
+            }
+        }
+        // Adjust autoclose_region offsets after text edit
+        if !self.autoclose_regions.is_empty() {
+            let old_len = range.end - range.start;
+            let new_len = new_text.len();
+            let delta = new_len as isize - old_len as isize;
+            let mut i = 0;
+            while i < self.autoclose_regions.len() {
+                let region_start = self.autoclose_regions[i].range.start;
+                let region_edited = region_start >= range.start && region_start < range.end;
+                if region_edited {
+                    self.autoclose_regions.remove(i);
+                } else if delta != 0 && region_start >= range.end {
+                    self.autoclose_regions[i].range.start =
+                        (region_start as isize + delta) as usize;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
             }
         }
         let is_bracket_related = new_text.chars().any(|c| matches!(c, '{' | '}' | '[' | ']' | '(' | ')' | '<' | '>'));

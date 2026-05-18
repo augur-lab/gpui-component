@@ -396,7 +396,6 @@ impl SyntaxHighlighter {
         struct BracketMatchRaw {
             open_range: Range<usize>,
             close_range: Range<usize>,
-            pattern_index: usize,
         }
 
         let mut matches_iter = query_cursor.matches(&query, tree.root_node(), TextProvider(&self.text));
@@ -404,7 +403,6 @@ impl SyntaxHighlighter {
         let mut all_matches: Vec<BracketMatchRaw> = Vec::new();
 
         while let Some(m) = matches_iter.next() {
-            let pattern_index = m.pattern_index;
             let mut open_range: Option<Range<usize>> = None;
             let mut close_range: Option<Range<usize>> = None;
 
@@ -420,7 +418,6 @@ impl SyntaxHighlighter {
                 all_matches.push(BracketMatchRaw {
                     open_range: open,
                     close_range: close,
-                    pattern_index,
                 });
             }
         }
