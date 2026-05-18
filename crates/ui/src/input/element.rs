@@ -2126,8 +2126,6 @@ impl Element for TextElement {
             state.scroll_size = prepaint.scroll_size;
             state.update_scroll_offset(Some(prepaint.cursor_scroll_offset), cx);
             state.deferred_scroll_offset = None;
-
-            cx.notify();
         });
 
         if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref() {

@@ -436,6 +436,11 @@ impl SyntaxHighlighter {
         result
     }
 
+    pub fn innermost_bracket_pair(&self, cursor: usize) -> Option<(Range<usize>, Range<usize>)> {
+        let Some(tree) = &self.tree else { return None };
+        innermost_bracket_pair_impl(tree, &self.text, &self.language, cursor)
+    }
+
     /// Returns the language name for this highlighter.
     pub fn language(&self) -> &SharedString {
         &self.language
@@ -445,6 +450,80 @@ impl SyntaxHighlighter {
     pub fn text(&self) -> &Rope {
         &self.text
     }
+}
+
+/// Standalone function for async bracket matching.
+/// Takes clonable data (Tree, Rope, language name) to avoid cloning the whole SyntaxHighlighter.
+pub fn innermost_bracket_pair_from_tree(
+    tree: &Tree,
+    text: &Rope,
+    language: &SharedString,
+    cursor: usize,
+) -> Option<(Range<usize>, Range<usize>)> {
+    innermost_bracket_pair_impl(tree, text, language, cursor)
+}
+
+fn innermost_bracket_pair_impl(
+    tree: &Tree,
+    text: &Rope,
+    language: &SharedString,
+    cursor: usize,
+) -> Option<(Range<usize>, Range<usize>)> {
+    let Some(config) = LanguageRegistry::singleton().language(language) else { return None };
+
+    if config.brackets.is_empty() {
+        return None;
+    }
+
+    let Ok(query) = Query::new(&config.language, &config.brackets) else { return None };
+
+    let open_ix = query.capture_names().iter().position(|n| *n == "open");
+    let close_ix = query.capture_names().iter().position(|n| *n == "close");
+
+    let (Some(open_ix), Some(close_ix)) = (open_ix, close_ix) else { return None };
+    let open_ix = open_ix as u32;
+    let close_ix = close_ix as u32;
+
+    let mut query_cursor = QueryCursor::new();
+
+    let mut matches_iter = query_cursor.matches(&query, tree.root_node(), TextProvider(text));
+
+    let mut best: Option<(Range<usize>, Range<usize>)> = None;
+    let mut best_size = usize::MAX;
+
+    while let Some(m) = matches_iter.next() {
+        let mut open_range: Option<Range<usize>> = None;
+        let mut close_range: Option<Range<usize>> = None;
+
+        for cap in m.captures {
+            if cap.index == open_ix {
+                open_range = Some(cap.node.byte_range());
+            } else if cap.index == close_ix {
+                close_range = Some(cap.node.byte_range());
+            }
+        }
+
+        if let (Some(open), Some(close)) = (open_range, close_range) {
+            if open.len() != 1 && close.len() != 1 {
+                continue;
+            }
+            let cursor_at_open = cursor >= open.start && cursor <= open.end;
+            let cursor_at_close = cursor >= close.start && cursor <= close.end;
+            let cursor_inside = cursor > open.end && cursor < close.start;
+            if cursor_at_open || cursor_at_close || cursor_inside {
+                let size = close.start - open.start;
+                if size < best_size {
+                    best_size = size;
+                    best = Some((open, close));
+                }
+            }
+        }
+    }
+
+    best
+}
+
+impl SyntaxHighlighter {
 
     /// Highlight the given text, returning a map from byte ranges to highlight captures.
     ///

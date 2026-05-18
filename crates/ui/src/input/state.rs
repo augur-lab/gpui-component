@@ -405,6 +405,7 @@ pub struct InputState {
     pub(super) inline_completion: InlineCompletion,
 
     pub(super) matched_brace_ranges: Option<(usize, usize, usize, usize)>,
+    pub(super) matched_brace_task: Option<Task<()>>,
     pub(super) autoclose_regions: Vec<AutocloseRegion>,
     pub(super) rainbow_bracket_ranges: Vec<(usize, Vec<std::ops::Range<usize>>)>,
     pub(super) enable_rainbow_brackets: bool,
@@ -496,6 +497,7 @@ impl InputState {
             silent_replace_text: false,
             emit_events: true,
             matched_brace_ranges: None,
+            matched_brace_task: None,
             autoclose_regions: Vec::new(),
             rainbow_bracket_ranges: Vec::new(),
             enable_rainbow_brackets: false,
@@ -2410,7 +2412,6 @@ impl InputState {
     }
 
     pub(super) fn find_matching_brace(&self) -> Option<(usize, usize, usize, usize)> {
-        const SEARCH_RADIUS: usize = 4096;
         let cursor = self.cursor();
         let highlighter = match self.mode.highlighter() {
             Some(rc) => {
@@ -2423,25 +2424,52 @@ impl InputState {
             None => return None,
         };
         let highlighter = highlighter.as_ref().unwrap();
-        let text_len = highlighter.text().len();
-        let search_start = cursor.saturating_sub(SEARCH_RADIUS);
-        let search_end = (cursor + SEARCH_RADIUS).min(text_len);
-        let pairs = highlighter.bracket_pairs(search_start..search_end);
-        let mut best_match: Option<(usize, usize, usize, usize)> = None;
-        let mut best_size = usize::MAX;
-        for (open_range, close_range) in pairs {
-            let cursor_at_open = cursor >= open_range.start && cursor <= open_range.end;
-            let cursor_at_close = cursor >= close_range.start && cursor <= close_range.end;
-            let cursor_inside = cursor > open_range.end && cursor < close_range.start;
-            if cursor_at_open || cursor_at_close || cursor_inside {
-                let size = close_range.start - open_range.start;
-                if size < best_size {
-                    best_size = size;
-                    best_match = Some((open_range.start, open_range.end - open_range.start, close_range.start, close_range.end - close_range.start));
+        highlighter.innermost_bracket_pair(cursor)
+            .map(|(open, close)| (open.start, open.len(), close.start, close.len()))
+    }
+
+    pub(super) fn refresh_matching_brace_async(&mut self, cx: &mut Context<Self>) {
+        let cursor = self.cursor();
+        let (tree, text, language) = match self.mode.highlighter() {
+            Some(rc) => {
+                let guard = rc.borrow();
+                match guard.as_ref() {
+                    Some(h) => {
+                        let tree = h.tree().cloned();
+                        let text = h.text().clone();
+                        let language = h.language().clone();
+                        (tree, text, language)
+                    }
+                    None => {
+                        self.matched_brace_ranges = None;
+                        return;
+                    }
                 }
             }
-        }
-        best_match
+            None => {
+                self.matched_brace_ranges = None;
+                return;
+            }
+        };
+
+        let Some(tree) = tree else {
+            self.matched_brace_ranges = None;
+            return;
+        };
+
+        self.matched_brace_task = Some(cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move {
+                crate::highlighter::innermost_bracket_pair_from_tree(&tree, &text, &language, cursor)
+                    .map(|(open, close)| (open.start, open.len(), close.start, close.len()))
+            }).await;
+
+            let _ = this.update(cx, |this, cx| {
+                if this.matched_brace_ranges != result {
+                    this.matched_brace_ranges = result;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     pub(super) fn compute_rainbow_brackets(&mut self, visible_start: usize, visible_end: usize) {
@@ -2674,7 +2702,34 @@ impl EntityInputHandler for InputState {
         self.selected_range = (new_offset..new_offset).into();
         self.ime_marked_range.take();
         self.update_preferred_column();
-        self.matched_brace_ranges = self.find_matching_brace();
+        // After text edit, adjust matched_brace_ranges offsets by edit delta
+        // (like Zed's anchor system: keep highlight at correct relative position
+        // until async task verifies it)
+        if let Some(mut pair) = self.matched_brace_ranges.take() {
+            let old_len = range.end - range.start;
+            let new_len = new_text.len();
+            let delta = new_len as isize - old_len as isize;
+            let (mut open_start, open_len, mut close_start, close_len) = pair;
+            let bracket_edited = (open_start < range.end && open_start + open_len > range.start)
+                || (close_start < range.end && close_start + close_len > range.start);
+            if bracket_edited {
+                self.matched_brace_ranges = None;
+            } else if delta != 0 {
+                if open_start >= range.start {
+                    open_start = (open_start as isize + delta) as usize;
+                }
+                if close_start >= range.start {
+                    close_start = (close_start as isize + delta) as usize;
+                }
+                self.matched_brace_ranges = Some((open_start, open_len, close_start, close_len));
+            } else {
+                self.matched_brace_ranges = Some(pair);
+            }
+        }
+        let is_bracket_related = new_text.chars().any(|c| matches!(c, '{' | '}' | '[' | ']' | '(' | ')' | '<' | '>'));
+        if is_bracket_related || self.matched_brace_ranges.is_some() {
+            self.refresh_matching_brace_async(cx);
+        }
         if self.enable_rainbow_brackets {
             self.rainbow_brackets_dirty = true;
         }
