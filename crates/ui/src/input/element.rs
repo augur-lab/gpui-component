@@ -1354,6 +1354,8 @@ pub(super) struct PrepaintState {
     /// First line of inline completion (painted after cursor on same line)
     ghost_first_line: Option<ShapedLine>,
     ghost_lines_height: Pixels,
+    /// Whether each visible buffer line has error diagnostics
+    error_lines: Vec<bool>,
 }
 
 impl PrepaintState {
@@ -1829,6 +1831,18 @@ impl Element for TextElement {
                 cursor_scroll_offset,
                 state,
             )));
+        let error_lines = state
+            .diagnostics()
+            .map(|d| {
+                last_layout
+                    .visible_buffer_lines
+                    .iter()
+                    .map(|&bl| d.has_error_at_line(bl))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let _ = state;
+
         let fold_icon_layout =
             self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
 
@@ -1851,6 +1865,7 @@ impl Element for TextElement {
             ghost_first_line,
             ghost_lines,
             ghost_lines_height,
+            error_lines,
         }
     }
 
@@ -2072,9 +2087,11 @@ impl Element for TextElement {
             ));
 
             // Each item is the normal lines.
-            for (lines, &buffer_line) in line_numbers
+            let error_color = cx.theme().highlight_theme.style.status.error(cx);
+            for ((lines, &buffer_line), &has_error) in line_numbers
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
+                .zip(prepaint.error_lines.iter())
             {
                 let p = point(input_bounds.origin.x, origin.y + offset_y);
                 let is_active = prepaint.current_row == Some(buffer_line);
@@ -2095,6 +2112,18 @@ impl Element for TextElement {
                             bg_color,
                         ));
                     }
+                }
+
+                // Paint red error dot in gutter for lines with diagnostics
+                if has_error {
+                    let dot_size = px(6.);
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            point(p.x + px(4.), p.y + (height - dot_size) / 2.0),
+                            size(dot_size, dot_size),
+                        ),
+                        error_color,
+                    ));
                 }
 
                 for line in lines {

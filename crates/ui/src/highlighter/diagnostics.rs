@@ -331,6 +331,15 @@ impl DiagnosticSet {
         styles
     }
 
+    pub fn has_error_at_line(&self, line: usize) -> bool {
+        if self.diagnostics.is_empty() {
+            return false;
+        }
+        let line_start = self.text.line_start_offset(line);
+        let line_end = self.text.line_end_offset(line);
+        self.range(line_start..line_end).any(|entry| entry.severity == DiagnosticSeverity::Error)
+    }
+
     #[allow(unused)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &DiagnosticEntry> {
         self.diagnostics.iter()
