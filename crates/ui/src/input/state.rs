@@ -55,6 +55,22 @@ use crate::{Root, history::History};
 pub struct Enter {
     /// Is confirm with secondary.
     pub secondary: bool,
+    /// Whether the Shift modifier was held when Enter was pressed.
+    pub shift: bool,
+}
+
+impl Enter {
+    /// Returns true if `action` is a primary `Enter` action (`secondary: false`),
+    /// regardless of whether Shift was held.
+    pub fn is_primary(action: &dyn Action) -> bool {
+        action.partial_eq(&Enter {
+            secondary: false,
+            shift: false,
+        }) || action.partial_eq(&Enter {
+            secondary: false,
+            shift: true,
+        })
+    }
 }
 
 actions!(
@@ -107,7 +123,7 @@ actions!(
 #[derive(Clone)]
 pub enum InputEvent {
     Change,
-    PressEnter { secondary: bool },
+    PressEnter { secondary: bool, shift: bool },
     Focus,
     Blur,
     TypingRightBrace { open_row: usize, close_row: usize },
@@ -141,9 +157,30 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("alt-delete", DeleteToNextWordEnd, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-delete", DeleteToNextWordEnd, Some(CONTEXT)),
-        KeyBinding::new("enter", Enter { secondary: false }, Some(CONTEXT)),
-        KeyBinding::new("shift-enter", Enter { secondary: false }, Some(CONTEXT)),
-        KeyBinding::new("secondary-enter", Enter { secondary: true }, Some(CONTEXT)),
+        KeyBinding::new(
+            "enter",
+            Enter {
+                secondary: false,
+                shift: false,
+            },
+            Some(CONTEXT),
+        ),
+        KeyBinding::new(
+            "shift-enter",
+            Enter {
+                secondary: false,
+                shift: true,
+            },
+            Some(CONTEXT),
+        ),
+        KeyBinding::new(
+            "secondary-enter",
+            Enter {
+                secondary: true,
+                shift: false,
+            },
+            Some(CONTEXT),
+        ),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
         KeyBinding::new("down", MoveDown, Some(CONTEXT)),
@@ -341,6 +378,7 @@ pub struct InputState {
     pub(super) disabled: bool,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
+    pub(super) submit_on_enter: bool,
     pub(super) soft_wrap: bool,
     pub(super) show_whitespaces: bool,
     /// This flag tells the renderer to prefer the end of the current visual line.
@@ -461,6 +499,7 @@ impl InputState {
             disabled: false,
             masked: false,
             clean_on_escape: false,
+            submit_on_enter: false,
             soft_wrap: true,
             show_whitespaces: false,
             loading: false,
@@ -855,6 +894,15 @@ impl InputState {
     /// Set true to clear the input by pressing Escape key.
     pub fn clean_on_escape(mut self) -> Self {
         self.clean_on_escape = true;
+        self
+    }
+
+    /// Set true to treat `Enter` as a submit action in multi-line mode,
+    /// while `Shift+Enter` inserts a newline.
+    ///
+    /// Default is `false` (both `Enter` and `Shift+Enter` insert a newline).
+    pub fn submit_on_enter(mut self, submit: bool) -> Self {
+        self.submit_on_enter = submit;
         self
     }
 
@@ -1380,9 +1428,15 @@ impl InputState {
             self.clear_inline_completion(cx);
         }
 
-        let old_line = self.cursor_position().line;
+let old_line = self.cursor_position().line;
 
-        if self.mode.is_multi_line() {
+        // In multi-line mode with `submit_on_enter` enabled, a plain `Enter`
+        // (without Shift) is treated as submit: propagate the action and emit
+        // PressEnter without inserting a newline. `Shift+Enter` still inserts
+        // a newline.
+        let insert_newline = self.mode.is_multi_line() && (!self.submit_on_enter || action.shift);
+
+        if insert_newline {
             let suggestion = if self.mode.is_code_editor() {
                 let cursor = self.cursor();
                 if let Some(language) = self.mode.language() {
@@ -1453,7 +1507,8 @@ impl InputState {
             }
             self.pause_blink_cursor(cx);
         } else {
-            // Single line input, just emit the event (e.g.: In a dialog to confirm).
+            // Single line input or submit-on-enter: just emit the event
+            // (e.g.: in a dialog to confirm, or a chat textarea to send).
             cx.propagate();
         }
 
@@ -1465,6 +1520,7 @@ impl InputState {
 
         cx.emit(InputEvent::PressEnter {
             secondary: action.secondary,
+            shift: action.shift,
         });
     }
 
