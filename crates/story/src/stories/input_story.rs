@@ -186,6 +186,10 @@ impl InputStory {
             }
             InputEvent::Focus => println!("Focus"),
             InputEvent::Blur => println!("Blur"),
+            InputEvent::TypingRightBrace { open_row, close_row } => {
+                println!("TypingRightBrace: open_row={}, close_row={}", open_row, close_row)
+            }
+            InputEvent::CursorLineChanged { line } => println!("CursorLineChanged: {}", line),
         };
     }
 
