@@ -217,9 +217,9 @@ impl TextWrapper {
                 }
             }
 
-            // Reset of the line
+            // Rest of the line
             if !line_str[prev_boundary_ix..].is_empty() || prev_boundary_ix == 0 {
-                wrapped_lines.push(prev_boundary_ix..line.len());
+                wrapped_lines.push(prev_boundary_ix..line_str.len());
             }
 
             new_lines.push(LineItem {

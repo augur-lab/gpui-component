@@ -1237,7 +1237,9 @@ impl TextElement {
                     )
                 };
 
-                let sub_line: SharedString = line_text[range.clone()].to_string().into();
+                let safe_start = clamp_to_char_boundary(&line_text, range.start);
+                let safe_end = clamp_to_char_boundary(&line_text, range.end);
+                let sub_line: SharedString = line_text[safe_start..safe_end].to_string().into();
                 let shaped_line = window
                     .text_system()
                     .shape_line(sub_line, font_size, &line_runs, None);
@@ -2226,6 +2228,21 @@ fn placeholder_line_runs<'a>(
     }
 
     result
+}
+
+/// Clamp a byte offset to a valid UTF-8 char boundary in the given string.
+/// If the offset is already on a char boundary, it is returned as-is.
+/// Otherwise, it is rounded down to the nearest char boundary.
+#[inline]
+fn clamp_to_char_boundary(s: &str, offset: usize) -> usize {
+    if offset >= s.len() {
+        return s.len();
+    }
+    let mut i = offset;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Get the runs for the given range.
