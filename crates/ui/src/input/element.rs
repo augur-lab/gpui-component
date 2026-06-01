@@ -2097,6 +2097,14 @@ impl Element for TextElement {
         if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
             offset_y += invisible_top_padding;
 
+            let gutter_bg = {
+                let bg = cx.theme().editor_background();
+                if cx.theme().is_dark() {
+                    bg.darken(0.04)
+                } else {
+                    bg.darken(0.04)
+                }
+            };
             window.paint_quad(fill(
                 Bounds {
                     origin: input_bounds.origin,
@@ -2105,7 +2113,7 @@ impl Element for TextElement {
                         input_bounds.size.height + prepaint.ghost_lines_height,
                     ),
                 },
-                cx.theme().editor_background(),
+                gutter_bg,
             ));
 
             // Each item is the normal lines.

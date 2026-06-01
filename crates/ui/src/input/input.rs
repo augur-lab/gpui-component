@@ -379,10 +379,10 @@ impl RenderOnce for Input {
             })
             .when(self.appearance, |this| {
                 this.bg(bg)
-                    .when(self.disabled, |this| this.opacity(0.5))
                     .rounded(cx.theme().radius)
                     .when(self.bordered, |this| {
-                        this.border_color(cx.theme().input)
+                        this.when(self.disabled, |this| this.opacity(0.5))
+                            .border_color(cx.theme().input)
                             .border_1()
                             .when(cx.theme().shadow, |this| this.shadow_xs())
                             .when(focused && self.focus_bordered, |this| {
