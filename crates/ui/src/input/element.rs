@@ -25,7 +25,7 @@ use super::{InputState, LastLayout, WhitespaceIndicators, mode::InputMode};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
-pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(10.);
+pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(6.);
 const FOLD_ICON_WIDTH: Pixels = px(14.);
 const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
 const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
@@ -830,7 +830,9 @@ impl TextElement {
     ) -> (Pixels, usize) {
         let total_lines = text.lines_len();
         let line_number_len = match total_lines {
-            0..=9999 => 5,
+            0..=9 => 2,
+            10..=99 => 3,
+            100..=999 => 4,
             10000..=99999 => 6,
             100000..=999999 => 7,
             _ => 8,
