@@ -2557,6 +2557,12 @@ let old_line = self.cursor_position().line;
             }).await;
 
             let _ = this.update(cx, |this, cx| {
+                if this.ime_marked_range.is_some() {
+                    // An IME composition is now active; the caller cleared
+                    // matched_brace_ranges in replace_and_mark_text_in_range,
+                    // so do not overwrite it with a stale bracket pair.
+                    return;
+                }
                 if this.matched_brace_ranges != result {
                     this.matched_brace_ranges = result;
                     cx.notify();
@@ -2812,6 +2818,7 @@ impl EntityInputHandler for InputState {
         self.update_fold_candidates_incremental(&range, new_text);
         self.lsp.update(&self.text, window, cx);
         self.selected_range = (new_offset..new_offset).into();
+        let was_ime = self.ime_marked_range.is_some();
         self.ime_marked_range.take();
         self.update_preferred_column();
         // After text edit, adjust matched_brace_ranges offsets by edit delta
@@ -2859,7 +2866,7 @@ impl EntityInputHandler for InputState {
             }
         }
         let is_bracket_related = new_text.chars().any(|c| matches!(c, '{' | '}' | '[' | ']' | '(' | ')' | '<' | '>'));
-        if is_bracket_related || self.matched_brace_ranges.is_some() {
+        if is_bracket_related || self.matched_brace_ranges.is_some() || was_ime {
             self.refresh_matching_brace_async(cx);
         }
         if self.enable_rainbow_brackets {
@@ -2951,6 +2958,11 @@ impl EntityInputHandler for InputState {
         self.mode.update_auto_grow(&self.display_map);
         self.history.start_grouping();
         self.push_history(&old_text, &range, new_text);
+        // IME pre-edit is not a real modification to the program body, so the
+        // bracket pair highlight should not move or be refreshed during IME
+        // composition. Hide it for now; it will be recomputed when the IME
+        // commits via replace_text_in_range.
+        self.matched_brace_ranges = None;
         cx.notify();
     }
 
