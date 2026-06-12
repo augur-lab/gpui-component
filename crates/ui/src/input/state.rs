@@ -1316,10 +1316,16 @@ impl InputState {
         let cursor = self.cursor();
         if let Some(region) = self.autoclose_regions.iter().find(|r| r.range.start == cursor) {
             let open_len = region.pair.start.len_utf8();
+            let close_len = region.pair.end.len_utf8();
+            // Only select the pair if cursor is right before the closing bracket
+            // (i.e., no characters between cursor and closing bracket)
             if cursor >= open_len {
-                self.selected_range =
-                    ((cursor - open_len)..(cursor + region.pair.end.len_utf8())).into();
-                self.autoclose_regions.retain(|r| r.range.start != cursor);
+                let next_char = self.text.chars_at(cursor).next();
+                if next_char == Some(region.pair.end.chars().next().unwrap_or('\0')) {
+                    self.selected_range =
+                        ((cursor - open_len)..(cursor + close_len)).into();
+                    self.autoclose_regions.retain(|r| r.range.start != cursor);
+                }
             }
         }
     }
