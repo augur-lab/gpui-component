@@ -1316,16 +1316,10 @@ impl InputState {
         let cursor = self.cursor();
         if let Some(region) = self.autoclose_regions.iter().find(|r| r.range.start == cursor) {
             let open_len = region.pair.start.len_utf8();
-            let close_len = region.pair.end.len_utf8();
-            // Only select the pair if cursor is right before the closing bracket
-            // (i.e., no characters between cursor and closing bracket)
             if cursor >= open_len {
-                let next_char = self.text.chars_at(cursor).next();
-                if next_char == Some(region.pair.end) {
-                    self.selected_range =
-                        ((cursor - open_len)..(cursor + close_len)).into();
-                    self.autoclose_regions.retain(|r| r.range.start != cursor);
-                }
+                self.selected_range =
+                    ((cursor - open_len)..(cursor + region.pair.end.len_utf8())).into();
+                self.autoclose_regions.retain(|r| r.range.start != cursor);
             }
         }
     }
@@ -2874,7 +2868,10 @@ impl EntityInputHandler for InputState {
             while i < self.autoclose_regions.len() {
                 let region_start = self.autoclose_regions[i].range.start;
                 let region_edited = region_start >= range.start && region_start < range.end;
-                if region_edited {
+                // Invalidate region when text is inserted at exactly the region position
+                // (e.g., typing a character between autoclose brackets like (a))
+                let region_at_insertion = delta > 0 && range.start == range.end && region_start == range.start;
+                if region_edited || region_at_insertion {
                     self.autoclose_regions.remove(i);
                 } else if delta != 0 && region_start >= range.end {
                     self.autoclose_regions[i].range.start =
