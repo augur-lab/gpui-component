@@ -852,6 +852,20 @@ impl InputState {
         self.disabled = was_disabled;
     }
 
+    /// Replace text in a specific byte range.
+    ///
+    /// The cursor will be moved to the end of replaced text.
+    pub fn replace_range(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let range_utf16 = self.range_to_utf16(&range);
+        self.replace_text_in_range_silent(Some(range_utf16), new_text, window, cx);
+    }
+
     fn replace_text(
         &mut self,
         text: impl Into<SharedString>,
@@ -2854,7 +2868,10 @@ impl EntityInputHandler for InputState {
             while i < self.autoclose_regions.len() {
                 let region_start = self.autoclose_regions[i].range.start;
                 let region_edited = region_start >= range.start && region_start < range.end;
-                if region_edited {
+                // Invalidate region when text is inserted at exactly the region position
+                // (e.g., typing a character between autoclose brackets like (a))
+                let region_at_insertion = delta > 0 && range.start == range.end && region_start == range.start;
+                if region_edited || region_at_insertion {
                     self.autoclose_regions.remove(i);
                 } else if delta != 0 && region_start >= range.end {
                     self.autoclose_regions[i].range.start =
