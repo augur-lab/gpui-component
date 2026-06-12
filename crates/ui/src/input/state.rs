@@ -1321,7 +1321,7 @@ impl InputState {
             // (i.e., no characters between cursor and closing bracket)
             if cursor >= open_len {
                 let next_char = self.text.chars_at(cursor).next();
-                if next_char == Some(region.pair.end.chars().next().unwrap_or('\0')) {
+                if next_char == Some(region.pair.end) {
                     self.selected_range =
                         ((cursor - open_len)..(cursor + close_len)).into();
                     self.autoclose_regions.retain(|r| r.range.start != cursor);
