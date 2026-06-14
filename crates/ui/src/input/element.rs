@@ -1252,8 +1252,10 @@ impl TextElement {
                 .with_whitespaces(whitespace_indicators.clone());
             lines.push(line_layout);
 
-            // +1 for the `\n`
-            run_offset += line_text.len() + 1;
+            // +1 for the `\n` — but only if this line actually has one (the last
+            // line of a file may not end with \n).
+            let has_newline = buffer_line + 1 < display_text.lines_len();
+            run_offset += line_text.len() + if has_newline { 1 } else { 0 };
         }
 
         lines
@@ -1341,6 +1343,22 @@ impl TextElement {
         if let Some(hover_style) = self.layout_hover_definition(cx) {
             styles.push(hover_style);
         }
+
+        // Clip diagnostic styles to visible_byte_range — the SumTree interval query
+        // returns overlapping entries that may extend beyond the requested range,
+        // which would shift the combined run offsets.
+        let diagnostic_styles: Vec<_> = diagnostic_styles
+            .into_iter()
+            .filter_map(|(range, style)| {
+                let start = range.start.max(visible_byte_range.start);
+                let end = range.end.min(visible_byte_range.end);
+                if start < end {
+                    Some((start..end, style))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Combine marker styles
         styles = gpui::combine_highlights(diagnostic_styles, styles).collect();
