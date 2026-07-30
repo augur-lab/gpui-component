@@ -2967,8 +2967,11 @@ impl EntityInputHandler for InputState {
             self.ime_marked_range = Some((range.start..range.start + new_text.len()).into());
             self.selected_range = new_selected_range_utf16
                 .as_ref()
-                .map(|range_utf16| self.range_from_utf16(range_utf16))
-                .map(|new_range| range.start + new_range.start..range.start + new_range.end)
+                .map(|range_utf16| {
+                    let new_text = Rope::from(new_text);
+                    range.start + new_text.offset_utf16_to_offset(range_utf16.start)
+                        ..range.start + new_text.offset_utf16_to_offset(range_utf16.end)
+                })
                 .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len())
                 .into();
         }
@@ -3250,5 +3253,579 @@ ORDER BY id
              Before: {:?}\nAfter: {:?}",
             colored_before, colored_after
         );
+    }
+
+    /// Regression test: `scroll_to` at end-of-buffer must produce a deferred
+    /// scroll target within the safe scroll range, so the painted frame
+    /// matches what `update_scroll_offset` persists (no jitter). A small
+    /// `cursor_surrounding_lines` override used to mismatch the hardcoded
+    /// 3-line edge clearance in `scroll_to`, overshooting `safe_y_min`.
+    #[gpui::test]
+    fn test_scroll_to_eob_does_not_overshoot_safe_range(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // JetBrains-style: 1 trailing empty row + 1-line cursor surrounding.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_scroll_beyond_last_line(Some(1), window, cx);
+                state.set_cursor_surrounding_lines(Some(1), window, cx);
+                let text: String = (1..=50)
+                    .map(|i| format!("line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                state.set_value(text, window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        // Sanity: paint populated `scroll_size` and `input_bounds` — without
+        // these, `safe_y_min` below collapses to 0 and the assertion is vacuous.
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert!(
+                    state.scroll_size.height > px(0.),
+                    "scroll_size not populated by initial paint"
+                );
+                assert!(
+                    state.input_bounds.size.height > px(0.),
+                    "input_bounds not populated by initial paint"
+                );
+            });
+        });
+
+        // Move cursor to end with downward direction — same code path as a
+        // `Down` keystroke at EOB. `scroll_to` runs synchronously inside
+        // `move_to`; inspect `deferred_scroll_offset` in the same closure
+        // before the next paint consumes and clears it.
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                let end = state.text.len();
+                state.move_to(end, Some(MoveDirection::Down), cx);
+
+                let deferred = state
+                    .deferred_scroll_offset
+                    .expect("scroll_to should populate deferred_scroll_offset");
+                let safe_y_min =
+                    (-state.scroll_size.height + state.input_bounds.size.height).min(px(0.));
+
+                assert!(
+                    deferred.y >= safe_y_min,
+                    "deferred_scroll_offset.y = {:?} below safe_y_min = {:?} \
+                     — paint would jitter (Bug C regression)",
+                    deferred.y,
+                    safe_y_min,
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_step(cx: &mut TestAppContext) {
+        let input = InputView::build(cx, |state| state).input;
+
+        cx.update(|cx| {
+            input.update(cx, |_state, cx| {
+                assert_eq!(
+                    NumberStep::from(5.).value(123., StepAction::Increment, cx),
+                    5.
+                );
+
+                // The step can differ by direction at a boundary: at 1.0 it
+                // is 0.1 going down and 0.5 going up.
+                let step = NumberStep::by_value(|value, action, _cx| {
+                    let below = match action {
+                        StepAction::Increment => value < 1.0,
+                        StepAction::Decrement => value <= 1.0,
+                    };
+                    if below { 0.1 } else { 0.5 }
+                });
+                assert_eq!(step.value(0.5, StepAction::Increment, cx), 0.1);
+                assert_eq!(step.value(1.0, StepAction::Increment, cx), 0.5);
+                assert_eq!(step.value(1.0, StepAction::Decrement, cx), 0.1);
+                assert_eq!(step.value(2.0, StepAction::Decrement, cx), 0.5);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_normalization(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| {
+            state.mask_pattern(MaskPattern::Number {
+                separator: None,
+                fraction: None,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // Full-width digits and the ideographic full stop are normalized,
+        // and the cursor is at the end (in normalized bytes, not the
+        // original 12 bytes).
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "12。5", window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert_eq!(state.value(), "12.5");
+                let cursor: Range<usize> = state.selected_range.into();
+                assert_eq!(cursor, 4..4);
+            });
+        });
+
+        // Non-numeric input is rejected.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "abc", window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert_eq!(state.value(), "12.5");
+            });
+        });
+
+        // A bare leading dot is kept as-is (normalized from the ideographic
+        // full stop), not completed to "0.", so it stays editable.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let range = state.range_to_utf16(&(0..state.text.len()));
+                state.replace_text_in_range(Some(range), "。", window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert_eq!(state.value(), ".");
+                let cursor: Range<usize> = state.selected_range.into();
+                assert_eq!(cursor, 1..1);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_normalization_with_separator(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| {
+            state.mask_pattern(MaskPattern::Number {
+                separator: Some(','),
+                fraction: Some(2),
+            })
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "1234", window, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert_eq!(state.value(), "1,234");
+                assert_eq!(state.unmask_value(), "1234");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_clamp_on_blur(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| {
+            state
+                .mask_pattern(MaskPattern::Number {
+                    separator: None,
+                    fraction: None,
+                })
+                .min(10.)
+                .max(100.)
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // Out-of-range values are allowed while typing, and clamped on blur.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "1000", window, cx);
+                assert_eq!(state.value(), "1000");
+                state.clamp_number_value(window, cx);
+                assert_eq!(state.value(), "100");
+
+                let range = state.range_to_utf16(&(0..state.text.len()));
+                state.replace_text_in_range(Some(range), "1", window, cx);
+                assert_eq!(state.value(), "1");
+                state.clamp_number_value(window, cx);
+                assert_eq!(state.value(), "10");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_undo_with_mask(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| {
+            state.mask_pattern(MaskPattern::Number {
+                separator: Some(','),
+                fraction: None,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // When the mask changes the text (regrouping separators), a
+        // whole-document change is recorded, so undo/redo can restore it.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "1234", window, cx);
+                assert_eq!(state.value(), "1,234");
+                state.replace_text_in_range(None, "5", window, cx);
+                assert_eq!(state.value(), "12,345");
+
+                // The two edits are grouped into one undo step (by the
+                // history group interval). Before the whole-document history
+                // fix, this undo produced a corrupted value like "1,2344".
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "");
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "12,345");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_leading_dot_editable(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| {
+            state.mask_pattern(MaskPattern::Number {
+                separator: None,
+                fraction: None,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "1.2", window, cx);
+
+                // Delete the integer part "1": the value keeps the leading dot
+                // (".2"), not completed to "0.2", so the digits before the dot
+                // stay editable.
+                let range = state.range_to_utf16(&(0..1));
+                state.replace_text_in_range(Some(range), "", window, cx);
+                assert_eq!(state.value(), ".2");
+                let cursor: Range<usize> = state.selected_range.into();
+                assert_eq!(cursor, 0..0);
+
+                // The user can type a new integer part.
+                state.replace_text_in_range(Some(0..0), "3", window, cx);
+                assert_eq!(state.value(), "3.2");
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_number_input_escape_invalid_text(cx: &mut TestAppContext) {
+        // A pre-existing invalid text (e.g. a `default_value` that does not
+        // conform) must not trap the user, the edit is allowed to fix it.
+        let input_view = InputView::build(cx, |state| {
+            state
+                .mask_pattern(MaskPattern::Number {
+                    separator: None,
+                    fraction: None,
+                })
+                .default_value("1,234")
+        });
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                // Delete the last char, the pending text "1,23" is still
+                // invalid, but the edit is allowed since the old text was
+                // already invalid.
+                let range = state.range_to_utf16(&(4..5));
+                state.replace_text_in_range(Some(range), "", window, cx);
+                assert_eq!(state.value(), "1,23");
+
+                // Once the text becomes valid, the validation works as usual.
+                let range = state.range_to_utf16(&(1..2));
+                state.replace_text_in_range(Some(range), "", window, cx);
+                assert_eq!(state.value(), "123");
+                state.replace_text_in_range(None, "a", window, cx);
+                assert_eq!(state.value(), "123");
+            });
+        });
+    }
+
+    /// After `set_value` on a single-line input the caret sits at the end (like
+    /// HTML `<input>`), yet the view is scrolled back to the start so a long
+    /// value shows its beginning instead of its tail.
+    #[gpui::test]
+    fn test_set_value_single_line_caret_at_end_view_at_start(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // Long enough to overflow any reasonable single-line input width.
+        let value = format!("https://example.com/v1/users?{}", "x=1&".repeat(120));
+        let len = value.len();
+
+        // Right after `set_value`, before the next paint consumes the deferred
+        // offset: caret is at the end, and the view is forced back to the start.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(value.clone(), window, cx);
+
+                assert_eq!(
+                    state.selected_range,
+                    Selection::new(len, len),
+                    "single-line caret should be at the end after set_value"
+                );
+                assert_eq!(
+                    state.deferred_scroll_offset,
+                    Some(point(px(0.), px(0.))),
+                    "the view should be forced back to the start"
+                );
+            });
+        });
+
+        // After a paint, the steady-state view stays at the start (x == 0) even
+        // though the caret is at the far end.
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert!(
+                    state.scroll_size.width > state.input_bounds.size.width,
+                    "value must overflow the input width or this test is vacuous"
+                );
+                assert_eq!(
+                    state.scroll_handle.offset().x,
+                    px(0.),
+                    "long value should display from its start, not its tail"
+                );
+            });
+        });
+    }
+
+    /// `replace_all` on a single-line input replaces the text, puts the
+    /// caret at the end, and — like `set_value` — snaps the view back to the
+    /// start so a long value shows its beginning instead of its tail.
+    #[gpui::test]
+    fn test_replace_all_single_line(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // Long enough to overflow any reasonable single-line input width.
+        let value = format!("https://example.com/v1/users?{}", "x=1&".repeat(120));
+        let len = value.len();
+
+        // Right after `replace_all`, before the next paint consumes the
+        // deferred offset: caret is at the end, and the view is forced back
+        // to the start.
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("hello", window, cx);
+                state.replace_all(value.clone(), window, cx);
+                assert_eq!(state.value(), value);
+                assert_eq!(
+                    state.selected_range,
+                    Selection::new(len, len),
+                    "single-line caret should be at the end after replace_all"
+                );
+                assert_eq!(
+                    state.scroll_handle.offset(),
+                    point(px(0.), px(0.)),
+                    "the scroll offset should be reset to the start"
+                );
+                assert_eq!(
+                    state.deferred_scroll_offset,
+                    Some(point(px(0.), px(0.))),
+                    "single-line should set a deferred scroll offset to keep the start visible"
+                );
+            });
+        });
+
+        // After a paint, the steady-state view stays at the start (x == 0)
+        // even though the caret is at the far end.
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                assert!(
+                    state.scroll_size.width > state.input_bounds.size.width,
+                    "value must overflow the input width or this test is vacuous"
+                );
+                assert_eq!(
+                    state.scroll_handle.offset().x,
+                    px(0.),
+                    "long value should display from its start, not its tail"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_single_line_removes_newlines(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.default_value("default\nvalue"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                assert_eq!(state.value(), "defaultvalue");
+
+                state.set_value("first\nsecond\r\nthird\rfourth", window, cx);
+                assert_eq!(state.value(), "firstsecondthirdfourth");
+
+                state.set_value("", window, cx);
+                state.insert("a\nb", window, cx);
+                assert_eq!(state.value(), "ab");
+            });
+
+            cx.write_to_clipboard(ClipboardItem::new_string("a\r\nb\nc\rd".to_string()));
+            input.update(cx, |state, cx| {
+                state.set_value("", window, cx);
+                state.paste(&Paste, window, cx);
+                assert_eq!(state.value(), "abcd");
+            });
+        });
+
+        cx.run_until_parked();
+    }
+
+    /// `replace_all` on a multi-line (non-code-editor) input clears the
+    /// selection to `0..0` and resets the scroll offset, but does not set a
+    /// deferred scroll offset (single-line only).
+    #[gpui::test]
+    fn test_replace_all_multi_line(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.multi_line(true));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("foo\nbar", window, cx);
+                state.replace_all("baz\nqux", window, cx);
+                assert_eq!(state.value(), "baz\nqux");
+                assert_eq!(
+                    state.selected_range,
+                    Selection::new(0, 0),
+                    "multi-line selection should be cleared after replace_all"
+                );
+                assert_eq!(
+                    state.scroll_handle.offset(),
+                    point(px(0.), px(0.)),
+                    "the scroll offset should be reset to the start"
+                );
+                assert!(
+                    state.deferred_scroll_offset.is_none(),
+                    "multi-line should not set a deferred scroll offset"
+                );
+            });
+        });
+    }
+
+    /// Unlike `set_value`, `replace_all` records the change so the user can
+    /// undo it back to the previous text and redo to the new text.
+    #[gpui::test]
+    fn test_replace_all_preserves_undo_history(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                // Seed with a value and clear history so the baseline is clean.
+                state.set_value("first", window, cx);
+                assert!(
+                    state.history.undos().is_empty(),
+                    "history should be empty after set_value"
+                );
+
+                // replace_all records a single undoable change.
+                state.replace_all("second", window, cx);
+                assert_eq!(state.value(), "second");
+                assert!(
+                    !state.history.undos().is_empty(),
+                    "replace_all should record an undo step"
+                );
+
+                // Undo restores the previous text.
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "first");
+
+                // Redo reapplies the replacement.
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "second");
+            });
+        });
+    }
+
+    /// `replace_all` on a code editor marks a pending update and resets LSP
+    /// state, so diagnostics/completions refresh against the new text.
+    #[gpui::test]
+    fn test_replace_all_code_editor(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                // Plant a pending-update flag and some LSP state to verify reset.
+                state.set_value("select 1", window, cx);
+                state._pending_update = false;
+
+                state.replace_all("select 2", window, cx);
+                assert_eq!(state.value(), "select 2");
+                assert!(
+                    state._pending_update,
+                    "replace_all on a code editor should request a pending update"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_set_selected_range(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.default_value("hello world"));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|_, cx| {
+            input.update(cx, |s, cx| {
+                s.set_selected_range(0..5, cx);
+                assert_eq!(s.selected_range(), 0..5);
+                assert_eq!(s.selected_text().to_string(), "hello");
+
+                s.set_selected_range(6..11, cx);
+                assert_eq!(s.selected_text().to_string(), "world");
+
+                // clamped + collapsed
+                s.set_selected_range(100..100, cx);
+                assert_eq!(s.selected_range(), 11..11);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_ime_selection_is_relative_to_replacement_start(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state.default_value("你好 "));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_selected_range(7..7, cx);
+                state.replace_and_mark_text_in_range(None, "s", Some(1..1), window, cx);
+                state.replace_and_mark_text_in_range(None, "sh", Some(2..2), window, cx);
+
+                assert_eq!(state.value(), "你好 sh");
+                assert_eq!(state.selected_range(), 9..9);
+                assert_eq!(state.ime_marked_range, Some((7..9).into()));
+            });
+        });
     }
 }
