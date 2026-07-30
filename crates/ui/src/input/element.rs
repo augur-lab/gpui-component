@@ -217,6 +217,76 @@ fn masked_display_offset(text: &Rope, original_offset: usize) -> usize {
     text.offset_to_char_index(original_offset) * MASK_CHAR.len_utf8()
 }
 
+/// Move the IME marked range (tracked against the original text) into the display text
+/// coordinate space, so that a run boundary can't land inside a multi-byte `MASK_CHAR`
+/// and panic text shaping on a non-char-boundary slice.
+fn ime_marked_display_range(
+    text: &Rope,
+    marked_range: Option<Range<usize>>,
+    masked: bool,
+) -> Option<Range<usize>> {
+    let marked = marked_range?;
+    if masked {
+        Some(masked_display_offset(text, marked.start)..masked_display_offset(text, marked.end))
+    } else {
+        Some(marked)
+    }
+}
+
+/// Minimum pixel padding the cursor is kept clear of the viewport's
+/// top/bottom edges before auto-scroll engages. Backs
+/// [`InputState::cursor_surrounding_lines`].
+///
+/// Auto-grow uses one line. Otherwise `None` falls back to the historical
+/// heuristic ([`BOTTOM_MARGIN_ROWS`] lines, or one line on small
+/// viewports); `Some(n)` uses `n` lines. The result is saturated against
+/// half the viewport so an oversized override can't invert the
+/// top/bottom thresholds into a scroll feedback loop.
+pub(super) fn cursor_surrounding_padding(
+    is_auto_grow: bool,
+    override_lines: Option<usize>,
+    visible_lines: usize,
+    line_height: Pixels,
+) -> Pixels {
+    if is_auto_grow {
+        return line_height;
+    }
+    let raw = match override_lines {
+        Some(lines) => lines as f32 * line_height,
+        None => {
+            if visible_lines < BOTTOM_MARGIN_ROWS * 8 {
+                line_height
+            } else {
+                BOTTOM_MARGIN_ROWS * line_height
+            }
+        }
+    };
+    // Saturate against half the viewport so top + bottom margins can coexist.
+    let viewport_half = (visible_lines as f32 * line_height).half();
+    raw.min(viewport_half)
+}
+
+/// Pixel height of the empty area below the last line in the editor's
+/// scrollable region. Backs [`InputState::scroll_beyond_last_line`].
+///
+/// `0` outside code-editor mode. Inside it, `None` is half the viewport
+/// (floored at [`BOTTOM_MARGIN_ROWS`] line-heights); `Some(n)` is exactly
+/// `n` line-heights.
+fn empty_bottom_height(
+    is_code_editor: bool,
+    override_rows: Option<usize>,
+    viewport_height: Pixels,
+    line_height: Pixels,
+) -> Pixels {
+    if !is_code_editor {
+        return px(0.);
+    }
+    match override_rows {
+        Some(rows) => rows as f32 * line_height,
+        None => viewport_height.half().max(BOTTOM_MARGIN_ROWS * line_height),
+    }
+}
+
 /// Layout information for fold icons.
 struct FoldIconLayout {
     /// Hitbox for the line number area (used for hover detection)
@@ -1618,6 +1688,12 @@ impl Element for TextElement {
             strikethrough: None,
         };
 
+        let ime_marked_range = ime_marked_display_range(
+            &text,
+            state.ime_marked_range.as_ref().map(|m| m.start..m.end),
+            state.masked,
+        );
+
         let runs = if let (false, Some(highlight_styles)) = (is_empty, highlight_styles) {
             let mut runs = Vec::with_capacity(highlight_styles.len() + 2);
 
@@ -1630,10 +1706,7 @@ impl Element for TextElement {
                 runs.extend(split_run_for_ime_underline(
                     run,
                     range.clone(),
-                    state
-                        .ime_marked_range
-                        .as_ref()
-                        .map(|marked| marked.start..marked.end),
+                    ime_marked_range.clone(),
                     marked_run.underline,
                 ));
             }
@@ -1642,10 +1715,7 @@ impl Element for TextElement {
             split_run_for_ime_underline(
                 run,
                 0..display_text.len(),
-                state
-                    .ime_marked_range
-                    .as_ref()
-                    .map(|marked| marked.start..marked.end),
+                ime_marked_range,
                 marked_run.underline,
             )
             .into_vec()
@@ -2552,6 +2622,42 @@ mod tests {
             split_run_for_ime_underline(TextStyle::default().to_run(0), 0..0, None, None)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn test_masked_ime_underline_splits_on_mask_char_boundaries() {
+        let underline = UnderlineStyle {
+            thickness: px(1.),
+            color: Some(gpui::black()),
+            wavy: false,
+        };
+        let text = Rope::from("abcdef");
+        let mask_len = MASK_CHAR.len_utf8();
+
+        assert_eq!(
+            ime_marked_display_range(&text, Some(4..6), false),
+            Some(4..6)
+        );
+        assert_eq!(ime_marked_display_range(&text, None, true), None);
+        assert_eq!(
+            ime_marked_display_range(&text, Some(4..6), true),
+            Some(4 * mask_len..6 * mask_len)
+        );
+
+        let display_text = MASK_CHAR.to_string().repeat(text.chars().count());
+        let runs = split_run_for_ime_underline(
+            TextStyle::default().to_run(display_text.len()),
+            0..display_text.len(),
+            ime_marked_display_range(&text, Some(4..6), true),
+            Some(underline),
+        );
+
+        let mut offset = 0;
+        for run in &runs {
+            assert!(display_text.is_char_boundary(offset));
+            offset += run.len;
+        }
+        assert_eq!(offset, display_text.len());
     }
 
     #[test]
