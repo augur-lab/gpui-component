@@ -2639,9 +2639,21 @@ let old_line = self.cursor_position().line;
         let is_in_string = if let Some(ref tree) = syntax_tree {
             let root = tree.root_node();
             if let Some(node) = root.named_descendant_for_byte_range(cursor, cursor) {
-                is_comment_or_string(node.kind()) && node.kind().contains("string")
-            } else { false }
-        } else { false };
+                if is_comment_or_string(node.kind()) && node.kind().contains("string") {
+                    true
+                } else if ch == '\'' {
+                    // C++ char_literal 内部是 `character`/`ERROR` 节点，tree-sitter 识别不到
+                    // 字符串上下文，退化为直接判断下一个字符是否就是闭合引号
+                    self.text.chars_at(cursor).next() == Some('\'')
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         if ch == '"' || ch == '\'' {
             if is_in_string {
                 if let Some(next_ch) = self.text.chars_at(cursor).next() {
