@@ -1103,6 +1103,8 @@ impl PopupMenu {
             .px(INNER_PADDING)
             .rounded(radius)
             .items_center()
+            .mx_1()
+            .my_0p5()
             .selected(selected)
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
