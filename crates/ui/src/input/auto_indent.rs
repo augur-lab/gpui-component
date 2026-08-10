@@ -85,7 +85,10 @@ fn tree_sitter_indent(
     text: &Rope,
     cursor_offset: usize,
 ) -> IndentSuggestion {
-    let Ok(query) = Query::new(&config.language, &config.indents) else {
+    let Some(language) = &config.language else {
+        return fallback_indent(text, cursor_offset);
+    };
+    let Ok(query) = Query::new(language, &config.indents) else {
         return fallback_indent(text, cursor_offset);
     };
 

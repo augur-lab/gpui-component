@@ -11,6 +11,8 @@ mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod inspector;
+#[cfg(all(target_os = "macos", not(test)))]
+mod macos_accessibility;
 mod root;
 mod styled;
 mod time;
@@ -48,6 +50,7 @@ pub mod label;
 pub mod link;
 pub mod list;
 pub mod menu;
+pub mod native_menu;
 pub mod notification;
 pub mod pagination;
 pub mod plot;
@@ -66,6 +69,7 @@ pub mod sidebar;
 pub mod skeleton;
 pub mod slider;
 pub mod spinner;
+pub mod status_bar;
 pub mod stepper;
 pub mod switch;
 pub mod tab;

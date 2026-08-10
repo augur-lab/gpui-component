@@ -8,7 +8,7 @@ description: A settings UI with grouped setting items and pages.
 > Since: v0.5.0
 
 The Settings component provides a UI for managing application settings. It includes grouped setting items and pages.
-We can search by title and description to filter the settings to display only relevant settings (Like this macOS, iOS Settings).
+We can search by title, description, and custom keywords to filter the settings to display only relevant settings (Like this macOS, iOS Settings).
 
 ## Import
 
@@ -124,6 +124,23 @@ SettingPage::new("General")
 ```rust
 SettingPage::new("General")
     .icon(IconName::Settings)
+    .groups(vec![...])
+```
+
+### Title Suffix
+
+Use `title_suffix` to render a custom element after the title in the page header,
+for example an info icon button that opens the help documentation:
+
+```rust
+SettingPage::new("General")
+    .title_suffix(|_, _| {
+        Button::new("help")
+            .icon(IconName::Info)
+            .ghost()
+            .xsmall()
+            .on_click(|_, _, cx| cx.open_url("https://example.com/help"))
+    })
     .groups(vec![...])
 ```
 
@@ -258,6 +275,30 @@ SettingItem::render(|options, _, _| {
         .into_any_element()
 })
 .disabled(true)
+```
+
+### Search Keywords
+
+Use `keywords` to attach additional search terms to an item. They are only used
+for search matching and are never rendered. For example, an item titled "Enable
+Two-factor auth" can be made searchable via "MFA":
+
+```rust
+SettingItem::new(
+    "Enable Two-factor auth",
+    SettingField::switch(...)
+)
+.keywords(["MFA", "2FA"])
+```
+
+This is also useful for [SettingItem::render] custom items that have no title or
+description but should still appear in search results:
+
+```rust
+SettingItem::render(|options, _, _| {
+    h_flex().child("Custom content").into_any_element()
+})
+.keywords(["Advanced", "Network"])
 ```
 
 ## Setting Fields
