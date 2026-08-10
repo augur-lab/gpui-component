@@ -46,6 +46,7 @@ pub struct Input {
     cleanable: bool,
     mask_toggle: bool,
     disabled: bool,
+    readonly: bool,
     bordered: bool,
     focus_bordered: bool,
     tab_index: isize,
@@ -93,6 +94,7 @@ impl Input {
             cleanable: false,
             mask_toggle: false,
             disabled: false,
+            readonly: false,
             bordered: true,
             focus_bordered: true,
             tab_index: 0,
@@ -188,6 +190,15 @@ impl Input {
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Set to readonly mode：样式正常（不暗淡）但不可编辑。
+    ///
+    /// 与 disabled 的区别：disabled 弱化视觉（muted_foreground + 半透明背景），
+    /// readonly 保持正常外观，仅阻止文本编辑（仍可聚焦、选中、复制）。
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
         self
     }
 
@@ -385,6 +396,7 @@ impl RenderOnce for Input {
         self.state.update(cx, |state, _| {
             state.context_menu_builder = self.context_menu_builder.clone();
             state.disabled = self.disabled;
+            state.readonly = self.readonly;
             state.size = self.size;
 
             // Only for single line mode
@@ -432,6 +444,7 @@ impl RenderOnce for Input {
         let suffix = self.suffix;
         let show_clear_button = self.cleanable
             && !state.disabled
+            && !state.readonly
             && !state.loading
             && state.text.len() > 0
             && state.mode.is_single_line();
@@ -462,7 +475,7 @@ impl RenderOnce for Input {
             .key_context(crate::input::CONTEXT)
             .track_focus(&state.focus_handle.clone())
             .tab_index(self.tab_index)
-            .when(!state.disabled, |this| {
+            .when(!state.disabled && !state.readonly, |this| {
                 this.on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
                     Self::handle_accessibility_set_value(&accessibility_state, data, window, cx);
                 })

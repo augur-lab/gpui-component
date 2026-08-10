@@ -387,6 +387,8 @@ pub struct InputState {
     pub(super) selecting: bool,
     pub(super) size: Size,
     pub(super) disabled: bool,
+    /// 只读模式：样式正常（不暗淡）但不可编辑（可聚焦/选中/复制）
+    pub(super) readonly: bool,
     pub(super) masked: bool,
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
@@ -526,6 +528,7 @@ impl InputState {
             input_bounds: Bounds::default(),
             selecting: false,
             disabled: false,
+            readonly: false,
             masked: false,
             clean_on_escape: false,
             submit_on_enter: false,
@@ -973,6 +976,20 @@ impl InputState {
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
+    }
+
+    /// Set with readonly mode：样式正常（不暗淡）但不可编辑。
+    ///
+    /// 与 disabled 的区别：disabled 弱化视觉（muted_foreground + 半透明背景），
+    /// readonly 保持正常外观，仅阻止文本编辑（仍可聚焦、选中、复制）。
+    pub fn readonly(mut self, readonly: bool) -> Self {
+        self.readonly = readonly;
+        self
+    }
+
+    /// Whether the input is in readonly mode.
+    pub fn is_readonly(&self) -> bool {
+        self.readonly
     }
 
     /// Set with password masked state.
@@ -3256,7 +3273,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || self.readonly {
             return;
         }
 
@@ -3434,7 +3451,7 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled {
+        if self.disabled || self.readonly {
             return;
         }
 
