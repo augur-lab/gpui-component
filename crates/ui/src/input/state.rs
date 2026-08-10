@@ -3273,7 +3273,9 @@ impl EntityInputHandler for InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.disabled || self.readonly {
+        // readonly 只阻止用户输入（键盘/IME/粘贴）；程序化设置
+        // （set_value 等 silent 路径）不受限——否则只读展示的内容无法更新
+        if self.disabled || (self.readonly && !self.silent_replace_text) {
             return;
         }
 
