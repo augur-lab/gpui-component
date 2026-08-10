@@ -255,10 +255,10 @@ impl Notification {
         cx.notify();
 
         let on_close = self.on_close.clone();
-        // Dismiss the notification after 0.15s to show the animation.
+        // Dismiss the notification after 0.6s so the fade-out animation plays fully (slow fade).
         cx.spawn_in(window, async move |view, cx| {
             cx.background_executor()
-                .timer(Duration::from_secs_f32(0.15))
+                .timer(Duration::from_secs_f32(0.6))
                 .await;
             _ = view.update_in(cx, |view, _, cx| {
                 view.closing = false;
@@ -372,7 +372,7 @@ impl Render for Notification {
             }))
             .with_animation(
                 ElementId::NamedInteger("slide-down".into(), closing as u64),
-                Animation::new(Duration::from_secs_f64(0.25))
+                Animation::new(Duration::from_secs_f64(0.6))
                     .with_easing(cubic_bezier(0.4, 0., 0.2, 1.)),
                 move |this, delta| {
                     if closing {
