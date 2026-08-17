@@ -2338,13 +2338,14 @@ impl Element for TextElement {
                 }
             }
 
-            // Paint a vertical separator between the line number gutter and the code area.
-            // `border` alone is nearly invisible against the editor background in dark mode,
-            // so mix in a bit of foreground to keep the boundary visible in both modes.
-            let separator_color = cx
-                .theme()
-                .border
-                .mix_oklab(cx.theme().foreground, 0.1);
+            // Paint a subtle vertical separator between the line number gutter and the code area.
+            // Use `border` directly in light mode; in dark mode `border` is nearly invisible
+            // against the editor background, so mix in just a hint of foreground.
+            let separator_color = if cx.theme().is_dark() {
+                cx.theme().border.mix_oklab(cx.theme().foreground, 0.05)
+            } else {
+                cx.theme().border
+            };
             let separator_x =
                 input_bounds.origin.x + prepaint.last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN;
             window.paint_quad(fill(
