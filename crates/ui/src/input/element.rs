@@ -2341,8 +2341,12 @@ impl Element for TextElement {
             // Paint a subtle vertical separator between the line number gutter and the code area.
             // Use `border` directly in light mode; in dark mode `border` is nearly invisible
             // against the editor background, so mix in just a hint of foreground.
+            // Note: `mix_oklab` keeps `factor` weight for the receiver, so pass 0.95 to
+            // keep 95% border + 5% foreground.
             let separator_color = if cx.theme().is_dark() {
-                cx.theme().border.mix_oklab(cx.theme().foreground, 0.05)
+                cx.theme()
+                    .border
+                    .mix_oklab(cx.theme().foreground, 0.95)
             } else {
                 cx.theme().border
             };
