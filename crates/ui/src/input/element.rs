@@ -2337,6 +2337,26 @@ impl Element for TextElement {
                     offset_y += prepaint.ghost_lines_height;
                 }
             }
+
+            // Paint a vertical separator between the line number gutter and the code area.
+            // `border` alone is nearly invisible against the editor background in dark mode,
+            // so mix in a bit of foreground to keep the boundary visible in both modes.
+            let separator_color = cx
+                .theme()
+                .border
+                .mix_oklab(cx.theme().foreground, 0.1);
+            let separator_x =
+                input_bounds.origin.x + prepaint.last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN;
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(separator_x, input_bounds.origin.y),
+                    size(
+                        px(1.),
+                        input_bounds.size.height + prepaint.ghost_lines_height,
+                    ),
+                ),
+                separator_color,
+            ));
         }
 
         // Paint fold icons (only visible on hover or for current line)
