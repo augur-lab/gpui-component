@@ -1956,7 +1956,8 @@ impl Element for TextElement {
             let other_line_runs = vec![TextRun {
                 len: line_number_len,
                 font: style.font(),
-                color: cx.theme().muted_foreground,
+                // 半透明让行号与行号区底色混合，浅色/深色主题下都自动降低对比度
+                color: cx.theme().muted_foreground.opacity(0.7),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
